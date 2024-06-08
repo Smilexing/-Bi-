@@ -18,9 +18,7 @@ import com.yupi.springbootinit.model.entity.User;
 /**
  * 帖子点赞接口
  *
- * @author <a href="https://github.com/liyupi">程序员鱼皮</a>
- * @from <a href="https://yupi.icu">编程导航知识星球</a>
- */
+  */
 @RestController
 @RequestMapping("/post_thumb")
 @Slf4j
