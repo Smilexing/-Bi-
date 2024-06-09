@@ -13,6 +13,7 @@ import java.util.List;
   */
 @EqualsAndHashCode(callSuper = true)
 @Data
+// 继承分页
 public class ChartQueryRequest extends PageRequest implements Serializable {
 
     /**

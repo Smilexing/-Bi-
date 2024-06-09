@@ -1,8 +1,10 @@
 package com.yupi.springbootinit.controller;
 
+import cn.hutool.core.io.FileUtil;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.google.gson.Gson;
+import com.qcloud.cos.transfer.Upload;
 import com.yupi.springbootinit.annotation.AuthCheck;
 import com.yupi.springbootinit.common.BaseResponse;
 import com.yupi.springbootinit.common.DeleteRequest;
@@ -12,23 +14,26 @@ import com.yupi.springbootinit.constant.CommonConstant;
 import com.yupi.springbootinit.constant.UserConstant;
 import com.yupi.springbootinit.exception.BusinessException;
 import com.yupi.springbootinit.exception.ThrowUtils;
-import com.yupi.springbootinit.model.dto.chart.ChartAddRequest;
-import com.yupi.springbootinit.model.dto.chart.ChartEditRequest;
-import com.yupi.springbootinit.model.dto.chart.ChartQueryRequest;
-import com.yupi.springbootinit.model.dto.chart.ChartUpdateRequest;
+import com.yupi.springbootinit.model.dto.chart.*;
 import com.yupi.springbootinit.model.entity.Chart;
 import com.yupi.springbootinit.model.entity.User;
+import com.yupi.springbootinit.model.enums.FileUploadBizEnum;
 import com.yupi.springbootinit.service.ChartService;
 import com.yupi.springbootinit.service.UserService;
+import com.yupi.springbootinit.utils.ExcelUtils;
 import com.yupi.springbootinit.utils.SqlUtils;
 import lombok.extern.slf4j.Slf4j;
+import net.bytebuddy.implementation.bytecode.Throw;
 import org.apache.commons.lang3.ObjectUtils;
 import org.apache.commons.lang3.StringUtils;
+import org.apache.poi.util.StringUtil;
 import org.springframework.beans.BeanUtils;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -212,29 +217,94 @@ public class ChartController {
     /**
      * 获取查询包装类
      *
-     * @param chartQueryRequest
+     * @param chartQueryRequest(查询已生成的图表）
      * @return
      */
+
     private QueryWrapper<Chart> getQueryWrapper(ChartQueryRequest chartQueryRequest) {
+    //     构建查询器
         QueryWrapper<Chart> queryWrapper = new QueryWrapper<>();
-        if (chartQueryRequest == null) {
-            return queryWrapper;
-        }
-        Long id = chartQueryRequest.getId();
+    //     获取用户输入-后续做查询条件判断
         String goal = chartQueryRequest.getGoal();
         String chartType = chartQueryRequest.getChartType();
+        Long id = chartQueryRequest.getId();
         Long userId = chartQueryRequest.getUserId();
-        String sortField = chartQueryRequest.getSortField();
         String sortOrder = chartQueryRequest.getSortOrder();
-
-        queryWrapper.eq(id != null && id > 0, "id", id);
+        String sortField = chartQueryRequest.getSortField();
+    //     空值校验并做等值匹配(可合并一起）
+    //     匹配查询eq前可加入预设条件，相当于少写一个if分支
         queryWrapper.eq(StringUtils.isNotBlank(goal), "goal", goal);
         queryWrapper.eq(StringUtils.isNotBlank(chartType), "chartType", chartType);
+        queryWrapper.eq(StringUtils.isNotEmpty(sortOrder), "sortOrder", sortOrder);
+        queryWrapper.eq(StringUtils.isNotEmpty(sortField), "sortField", sortField);
+        queryWrapper.eq(id != null && id > 0, "id", id);
         queryWrapper.eq(ObjectUtils.isNotEmpty(userId), "userId", userId);
-        queryWrapper.eq("isDelete", false);
-        queryWrapper.orderBy(SqlUtils.validSortField(sortField), sortOrder.equals(CommonConstant.SORT_ORDER_ASC),
-                sortField);
+
+    //     指定查询结果的排序方式-orderBy
+    // orderBy:指定排序字段和排序方式，第一个参数默认为true代表是否开启排序，第二个字段说明排序方式（升降），第三个参数代表排序字段名
+        queryWrapper.orderBy(SqlUtils.validSortField(sortField), sortOrder.equals(CommonConstant.SORT_ORDER_ASC), sortField);
+    //     返回查询结果
         return queryWrapper;
+    }
+
+
+    /**
+     * 调用Ai进行智能分析
+     * 返回拼接的Ai提示词
+     */
+
+    @PostMapping("/gen")
+    public BaseResponse<String> genChartByAi(@RequestPart("file") MultipartFile multipartFile, GenChartByAiRequest genChartByAiRequest, HttpServletRequest request) {
+
+    //     获取用户输入-存放到数据库（异步）
+        String chartName = genChartByAiRequest.getChartName();
+        String chartType = genChartByAiRequest.getChartType();
+        String goal = genChartByAiRequest.getGoal();
+
+    //     空值判断,注意是String类型
+            ThrowUtils.throwIf(StringUtils.isEmpty(goal),ErrorCode.PARAMS_ERROR,"请求参数为空");
+    //      对图表名称进行限制，长度和空值限制
+            ThrowUtils.throwIf(StringUtils.isNotEmpty(chartName) && chartName.length() > 100, ErrorCode.PARAMS_ERROR, "名称长度大于100");
+
+    //         预设Ai模型提示词，自动拼接在goal后面
+        StringBuilder userInput = new StringBuilder();
+        userInput.append("你是一个数据分析师，接下来我会给你我的分析目标和原始数据，请告诉我分析结论").append("\n");
+        userInput.append("分析目标：").append(goal).append("\n");
+
+    //     压缩数据-调用工具类
+        String result = ExcelUtils.excelToCsv(multipartFile);
+    //      将压缩之后的数据拼接到提示词后面
+        userInput.append("数据：").append(result).append("\n");
+
+        return ResultUtils.success(userInput.toString());
+    }
+
+    /**
+     * 上传头像（图片）校验
+     * 不同文件（业务场景划分）校验
+     * @param multipartFile
+     * @param fileUploadBizEnum 指定业务场景（枚举类）
+     */
+    private void validFile(MultipartFile multipartFile, FileUploadBizEnum fileUploadBizEnum) {
+    //
+    //     获取文件后缀-利用hutool获取到文件名称（分隔"."之后的名称）
+        String fileSuffix = FileUtil.getSuffix(multipartFile.getOriginalFilename());
+
+    //     对上传的文件做大小限制
+    //     获取当前文件大小-以字符数组接受，长度用long表示
+        long fileSize = multipartFile.getSize();
+        final long ONE_M = 1024 * 1024L;
+    //      根据业务场景做对应校验规则
+        if (FileUploadBizEnum.USER_AVATAR.equals(fileUploadBizEnum)) {
+            //     大小超过限制，抛出异常
+            if (fileSize > ONE_M) {
+                throw new BusinessException(ErrorCode.PARAMS_ERROR, "文件大小不能超过1M");
+            }
+            //      后缀要为图片格式
+            if (!Arrays.asList("jpeg", "jpg", "svg", "png", "webp").contains(fileSuffix)) {
+                throw new BusinessException(ErrorCode.PARAMS_ERROR, "文件类型错误");
+            }
+        }
     }
 
 
