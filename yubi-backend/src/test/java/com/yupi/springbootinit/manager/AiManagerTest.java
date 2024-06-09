@@ -22,4 +22,10 @@ class AiManagerTest {
                 "3号,30\n");
         System.out.println(answer);
     }
+
+    @Test
+    void doChat1() {
+        String answer = aiManager.doChat(1696419536644931586L,"邓紫棋");
+        System.out.println(answer);
+    }
 }

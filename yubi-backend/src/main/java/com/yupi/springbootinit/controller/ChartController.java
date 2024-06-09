@@ -14,6 +14,8 @@ import com.yupi.springbootinit.constant.CommonConstant;
 import com.yupi.springbootinit.constant.UserConstant;
 import com.yupi.springbootinit.exception.BusinessException;
 import com.yupi.springbootinit.exception.ThrowUtils;
+import com.yupi.springbootinit.manager.AiManager;
+import com.yupi.springbootinit.manager.RedisLimiterManager;
 import com.yupi.springbootinit.model.dto.chart.*;
 import com.yupi.springbootinit.model.entity.Chart;
 import com.yupi.springbootinit.model.entity.User;
@@ -50,6 +52,10 @@ public class ChartController {
 
     @Resource
     private UserService userService;
+    @Resource
+    private RedisLimiterManager redisLimiterManager;
+    @Resource
+    private AiManager aiManager;
 
     private final static Gson GSON = new Gson();
 
@@ -266,16 +272,35 @@ public class ChartController {
     //      对图表名称进行限制，长度和空值限制
             ThrowUtils.throwIf(StringUtils.isNotEmpty(chartName) && chartName.length() > 100, ErrorCode.PARAMS_ERROR, "名称长度大于100");
 
-    //         预设Ai模型提示词，自动拼接在goal后面
+    //      调用Ai之前，先做限流设置
+        // 限流以用户id作为key标识限流器
+        // 获取用户对象(拿到id)
+        User loginUser = userService.getLoginUser(request);
+        redisLimiterManager.doRateLimit("genChartByAi_" + loginUser.getId());
+    //     将模式id写死
+        long biModelId = 1659171950288818178L;
+
+        // 构造用户输入
         StringBuilder userInput = new StringBuilder();
-        userInput.append("你是一个数据分析师，接下来我会给你我的分析目标和原始数据，请告诉我分析结论").append("\n");
-        userInput.append("分析目标：").append(goal).append("\n");
+        userInput.append("分析需求：").append("\n");
 
-    //     压缩数据-调用工具类
-        String result = ExcelUtils.excelToCsv(multipartFile);
-    //      将压缩之后的数据拼接到提示词后面
-        userInput.append("数据：").append(result).append("\n");
+        // 拼接分析目标
+        String userGoal = goal;
+        if (StringUtils.isNotBlank(chartType)) {
+            userGoal += "，请使用" + chartType;
+        }
+        userInput.append(userGoal).append("\n");
+        userInput.append("原始数据：").append("\n");
 
+        //调用工具类压缩数据
+        String csvData = ExcelUtils.excelToCsv(multipartFile);
+        userInput.append(csvData).append("\n");
+
+        String result = aiManager.doChat(biModelId, userInput.toString());
+        String[] splits = result.split("【【【【【");
+        if (splits.length < 3) {
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "AI 生成错误");
+        }
         return ResultUtils.success(userInput.toString());
     }
 
