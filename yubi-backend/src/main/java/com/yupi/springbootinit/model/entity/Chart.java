@@ -20,6 +20,10 @@ public class Chart implements Serializable {
     private Long id;
 
     /**
+     * 名称
+     */
+    private String name;
+    /**
      * 分析目标
      */
     private String goal;
@@ -49,6 +53,16 @@ public class Chart implements Serializable {
      */
     private Long userId;
 
+    /**
+     * 任务状态
+     * wait,running,succeed,failed
+     */
+    private String status;
+
+    /**
+     * 执行信息
+     */
+    private String execMessage;
     /**
      * 创建时间
      */

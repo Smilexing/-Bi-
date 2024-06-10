@@ -20,6 +20,7 @@ import com.yupi.springbootinit.model.dto.chart.*;
 import com.yupi.springbootinit.model.entity.Chart;
 import com.yupi.springbootinit.model.entity.User;
 import com.yupi.springbootinit.model.enums.FileUploadBizEnum;
+import com.yupi.springbootinit.model.vo.BiResponse;
 import com.yupi.springbootinit.service.ChartService;
 import com.yupi.springbootinit.service.UserService;
 import com.yupi.springbootinit.utils.ExcelUtils;
@@ -29,6 +30,7 @@ import net.bytebuddy.implementation.bytecode.Throw;
 import org.apache.commons.lang3.ObjectUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.poi.util.StringUtil;
+import org.checkerframework.checker.units.qual.C;
 import org.springframework.beans.BeanUtils;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
@@ -37,6 +39,7 @@ import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * 帖子接口
@@ -301,9 +304,64 @@ public class ChartController {
         if (splits.length < 3) {
             throw new BusinessException(ErrorCode.SYSTEM_ERROR, "AI 生成错误");
         }
+        String genChart = splits[1].trim();
+        String genResult = splits[2].trim();
+        // 插入到数据库
+        Chart chart = new Chart();
+        chart.setName(chartName);
+        chart.setGoal(goal);
+        chart.setChartData(csvData);
+        chart.setChartType(chartType);
+        // 异步调用,此时还未生成完毕数据结果
+        // chart.setGenChart(genChart);
+        // chart.setGenResult(genResult);
+        // chart.setUserId(loginUser.getId());
+        // 设置任务状态为wait
+        chart.setStatus("wait");
+        chart.setUserId(loginUser.getId());
+        boolean saveResult = chartService.save(chart);
+        ThrowUtils.throwIf(!saveResult, ErrorCode.SYSTEM_ERROR, "图表保存失败");
+
+        // Ai异步处理任务
+        CompletableFuture.runAsync(() -> {
+            // 异步处理先修改数据库的状态为"run",执行成功再更新状态"success",失败则"fail"
+            // 创建新的chart对象,id递增,唯一标识图表
+            Chart updateChart = new Chart();
+            updateChart.setStatus("running");
+            boolean b = chartService.updateById(updateChart);
+            //     提交修改失败,尝试将status修改为fail并错误信息记录到execmessage
+            if (!b) {
+                handleChartUpdateError(chart.getId(), "更新图表成功状态失败");
+            }
+        });
+
+
+        // Ai处理返回结果(前端)
+        BiResponse biResponse = new BiResponse();
+        biResponse.setGenChart(genChart);
+        // biResponse.setGenResult(genResult);
+        // biResponse.setChartId(chart.getId());
+
+
         return ResultUtils.success(userInput.toString());
     }
 
+    /**
+     * 图表id
+     * @param chartId
+     * @param execMessage
+     */
+    private void handleChartUpdateError(long chartId, String execMessage) {
+        // 更新status为running失败
+        Chart updateChartResult = new Chart();
+        updateChartResult.setId(chartId);
+        updateChartResult.setStatus("failed");
+        updateChartResult.setExecMessage(execMessage);
+        boolean updateResult = chartService.updateById(updateChartResult);
+        if (!updateResult) {
+            log.error("更新图表失败状态失败" + chartId + "." + execMessage);
+        }
+    }
     /**
      * 上传头像（图片）校验
      * 不同文件（业务场景划分）校验
