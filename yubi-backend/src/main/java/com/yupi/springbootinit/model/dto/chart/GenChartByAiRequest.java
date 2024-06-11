@@ -12,6 +12,13 @@ import java.io.Serializable;
  */
 @Data
 public class GenChartByAiRequest implements Serializable {
+
+
+    /**
+     * 指定图表的名称
+     */
+    private String name;
+
     /**
      * 指定图表（提示词）
      */
@@ -22,10 +29,7 @@ public class GenChartByAiRequest implements Serializable {
      */
     private String chartType;
 
-    /**
-     * 指定图表的名称
-     */
-    private String chartName;
+
 
     private static final long serialVersionUID = 1L;
 
